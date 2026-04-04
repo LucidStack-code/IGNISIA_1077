@@ -1,5 +1,6 @@
 # TransitSync 🚀
 
+
 **TransitSync** is an advanced, predictive last-mile synchronization platform designed to bridge the gap between high-capacity transit (Metro/Trains) and individual last-mile transport (E-bikes/Cabs). 
 
 By leveraging real-time data and machine learning, the platform predicts demand surges, models network-wide disruptions, and manages a battery-constrained fleet to ensure passengers are never stranded.
@@ -142,5 +143,4 @@ Invoke-RestMethod -Uri http://localhost:8000/api/rides/request -Method POST -Con
 -   **Dynamic Pricing**: Surge pricing implementation based on ripple intensity.
 
 ---
-
 Made with ❤️ by the **TechWizard Team** (LucidStack-code).
