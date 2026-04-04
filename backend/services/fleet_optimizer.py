@@ -202,9 +202,59 @@ def real_time_match(
 def proactive_rebalance_future(
     drivers: List[Dict],
     future_hotspots: List[Dict],
+    radius_km: float = 8.0,
 ) -> List[Dict]:
     """
-    Twist 1: Pre-positioning logic for future surges
-    Looks at T+30 demand and moves nearby idle high-battery drivers.
+    Twist 1: Pre-positioning logic for future surges (T+30).
+    Filters for high-battery drivers (>40%) to ensure they have enough power 
+    for proactive long-distance repositioning.
     """
-    return greedy_assignment(drivers, future_hotspots, radius_km=8.0)
+    assignments = []
+    assigned_driver_ids = set()
+
+    for hotspot in future_hotspots:
+        hlat = hotspot.get("lat", 0)
+        hlon = hotspot.get("lon", 0)
+        predicted = hotspot.get("predicted_passengers", 50)
+        station_id = hotspot.get("station_id", "")
+
+        # Target 1 driver per 4 pax for proactive rebalance
+        vehicles_needed = max(1, math.ceil(predicted / 4))
+
+        candidates = []
+        for driver in drivers:
+            if not driver.get("is_online") or not driver.get("is_available"):
+                continue
+            if driver["id"] in assigned_driver_ids:
+                continue
+
+            # Battery filtering (Restoration of Twist 1 Logic)
+            battery = driver.get("battery_level", 1.0)
+            if battery < 0.4 or driver.get("is_charging", False):
+                continue
+
+            dist = haversine(driver["lat"], driver["lon"], hlat, hlon)
+            if dist <= radius_km:
+                score = score_driver_for_hotspot(driver, hotspot, dist)
+                candidates.append((score, dist, driver))
+
+        candidates.sort(key=lambda x: x[0])
+
+        assigned_count = 0
+        for score, dist, driver in candidates:
+            if assigned_count >= vehicles_needed:
+                break
+            assignments.append({
+                "driver_id": driver["id"],
+                "hotspot_station_id": station_id,
+                "hotspot_lat": hlat,
+                "hotspot_lon": hlon,
+                "predicted_passengers": predicted,
+                "distance_km": round(dist, 2),
+                "score": score,
+                "eta_minutes": round(dist / 0.4, 1),
+            })
+            assigned_driver_ids.add(driver["id"])
+            assigned_count += 1
+
+    return assignments
