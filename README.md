@@ -1,14 +1,14 @@
 # TransitSync 🚀
 
 
-**TransitSync** is an advanced, predictive last-mile synchronization platform designed to bridge the gap between high-capacity transit (Metro/Trains) and individual last-mile transport (E-bikes/Cabs). 
+**TransitSync** is an advanced, predictive last-mile synchronization platform designed to bridge the gap between high-capacity transit (Metro/Trains) and individual last-mile transport (E-bikes/Cabs/Auto). 
 
 By leveraging real-time data and machine learning, the platform predicts demand surges, models network-wide disruptions, and manages a battery-constrained fleet to ensure passengers are never stranded.
 
 ---
 
 ## 🛑 The Problem
-Transit networks are highly interconnected. A single train breakdown doesn't just stall one station; it creates a "ripple effect" of stranded passengers who spill over to neighboring stations, causing unpredictable demand surges that existing taxi/e-bike fleets cannot anticipate. 
+Transit networks are highly interconnected. A single train breakdown doesn't just stall one station; it creates a "ripple effect" of stranded passengers who spill over to neighboring stations, causing unpredictable demand surges that existing taxi/e-bike/auto fleets cannot anticipate. 
 
 ## ✅ The Solution
 TransitSync provides an integrated **Admin Dashboard** and **Predictive Engine** that:
