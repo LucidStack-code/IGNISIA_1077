@@ -186,6 +186,23 @@ export default function AdminPage() {
     };
   }, []);
 
+  const handleRecharge = async () => {
+    setLoad('recharge', true);
+    try {
+      const res = await fetch(`${API_BASE}/simulate/recharge-all`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        addEvent('⚡ Fleet Recharged to 100%!', 'success');
+      }
+    } catch (err) {
+      console.error('Recharge error:', err);
+      addEvent('❌ Recharge failed', 'danger');
+    } finally {
+      setLoad('recharge', false);
+    }
+  };
+
+
   const handleOptimize = async () => {
     setLoad('optimize', true);
     try {
@@ -288,9 +305,14 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <button className="btn btn-primary" onClick={handleOptimize} disabled={loading.optimize}
-            style={{ width: '100%', justifyContent: 'center', fontSize: 13 }}>
-            {loading.optimize ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Optimizing...</> : '⚡ Optimize Fleet'}
+          <button className="btn btn-primary" onClick={handleOptimize} disabled={loading.rebalance}
+            style={{ width: '100%', justifyContent: 'center', fontSize: 13, background: 'var(--accent-blue)' }}>
+            {loading.rebalance ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Optimizing...</> : '🚀 Optimize Fleet'}
+          </button>
+          
+          <button className="btn" onClick={handleRecharge} disabled={loading.recharge}
+            style={{ width: '100%', justifyContent: 'center', fontSize: 13, background: 'rgba(0, 230, 118, 0.1)', color: 'var(--accent-green)', border: '1px solid var(--accent-green)' }}>
+            {loading.recharge ? '⚡ Recharging...' : '⚡ Recharge Fleet (God Mode)'}
           </button>
         </div>
 

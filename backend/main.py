@@ -139,8 +139,20 @@ async def background_simulation():
                     # Deplete faster if busy (on trip), slower if idle
                     depletion = random.uniform(0.002, 0.005) if not is_available else random.uniform(0.0005, 0.001)
                     battery = max(0.0, battery - depletion)
+
+                # 2. Auto-Trip Completion (Simulation Polish)
+                # If busy, randomly complete trip (~60s avg)
+                if not is_available and not is_charging:
+                    if random.random() > 0.85:
+                        is_available = True
+                        toggle_driver_availability(d["id"], True)
+
+                # 3. Critical Battery Safety Net
+                if battery < 0.05 and not is_available:
+                    is_available = True
+                    toggle_driver_availability(d["id"], True)
                 
-                # 2. Charging Logic
+                # 4. Charging Logic
                 if battery < 0.15 and is_available and not is_charging:
                     # Low battery! Find nearest hub
                     nearest_hub = None
@@ -174,7 +186,7 @@ async def background_simulation():
                     updated_count += 1
                     continue
 
-                # 3. Normal Jitter for available drivers
+                # 5. Normal Jitter for available drivers
                 if is_available and random.random() > 0.7:
                     new_lat = d["lat"] + random.uniform(-0.0003, 0.0003)
                     new_lon = d["lon"] + random.uniform(-0.0003, 0.0003)
@@ -871,6 +883,32 @@ def _mock_all_predictions():
          "time_window_start": datetime.utcnow().isoformat()}
         for s in stations
     ]
+
+
+@app.post("/api/simulate/recharge-all")
+async def recharge_all_fleet():
+    """Emergency 'God-Mode' for hackathon demo: Recharges all drivers to 100%"""
+    if not DB_AVAILABLE:
+        return {"status": "error", "message": "DB not available"}
+    import psycopg2
+    from db.init_db import DB_CONFIG
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE drivers_live 
+            SET battery_level = 1.0, is_charging = FALSE, is_available = TRUE, is_online = TRUE, updated_at = NOW()
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        await manager.broadcast_to_admins({
+            "type": "FLEET_RECHARGED",
+            "message": "⚡ Emergency Fleet Recharge initiated by Admin!"
+        })
+        return {"status": "ok", "message": "All drivers recharged to 100% and set to Available"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":
