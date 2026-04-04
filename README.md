@@ -1,236 +1,146 @@
-# 🚇 TransitSync — Predictive Last-Mile Transit Synchronizer
+# TransitSync 🚀
 
-> **Hackathon Project SC01** — Pre-positions vehicles before trains arrive using Hybrid ML (XGBoost + LSTM), PostGIS geofencing, WebSocket alerts, and real-time matching.
+**TransitSync** is an advanced, predictive last-mile synchronization platform designed to bridge the gap between high-capacity transit (Metro/Trains) and individual last-mile transport (E-bikes/Cabs). 
+
+By leveraging real-time data and machine learning, the platform predicts demand surges, models network-wide disruptions, and manages a battery-constrained fleet to ensure passengers are never stranded.
 
 ---
 
-## 📁 Project Structure
+## 🛑 The Problem
+Transit networks are highly interconnected. A single train breakdown doesn't just stall one station; it creates a "ripple effect" of stranded passengers who spill over to neighboring stations, causing unpredictable demand surges that existing taxi/e-bike fleets cannot anticipate. 
 
+## ✅ The Solution
+TransitSync provides an integrated **Admin Dashboard** and **Predictive Engine** that:
+1.  **Predicts Demand**: Uses a Hybrid ML model (XGBoost + LSTM) to forecast passenger loads 30–60 minutes ahead.
+2.  **Models Ripples**: Simulates network "contagion" where disruptions at one station propagate demand to others.
+3.  **Manages Resources**: Enforces real-world battery constraints, autonomously routing low-power vehicles to strategic **Charging Hubs**.
+
+---
+
+## ✨ Key Features
+
+### 🌐 Advanced Network Simulation
+- **Ripple Effect Engine**: Models passenger "spill-over" downstream from station disruptions with realistic time delays.
+- **Disruption Simulator**: Allows admins to trigger "Breakdowns" and observe real-time demand propagation across the Pune Metro L1 layout.
+
+### 🔋 Battery-Aware Fleet Management
+- **Autonomous Charging**: Idle vehicles with <15% battery automatically self-route to the nearest charging hub.
+- **Range Constraints**: Low-battery vehicles are restricted to short-radius trips to prevent stranding.
+- **Live Health Monitoring**: Color-coded battery status (Green/Orange/Red) for every vehicle in the fleet.
+
+### 📊 Admin Intelligence Dashboard
+- **Predictive Heatmaps**: Visualizes demand "glow" based on future predictions at T+30 and T+60 minutes.
+- **Proactive Optimization**: A one-click "Surge Mode" that pre-positions drivers based on future forecasted demand rather than current location.
+- **Live GTFS Feed**: Real-time train tracking and arrival time (ETA) calculation.
+
+---
+
+## 🛠️ Tech Stack
+
+-   **Frontend**: 
+    -   React.js (Vite)
+    -   Leaflet.js (Interactive Geospatial Mapping)
+    -   Lucide React (Modern Iconography)
+    -   Vanilla CSS3 (Responsive Design & Glassmorphism)
+-   **Backend**: 
+    -   FastAPI (Asynchronous Python Framework)
+    -   XGBoost (Demand Prediction Model)
+    -   PostgreSQL + PostGIS (Spatial Database)
+    -   Redis (Real-time Pub/Sub & Caching)
+    -   Uvicorn (ASGI Server)
+-   **DevOps**: 
+    -   Docker & Docker Compose (Containerization)
+    -   Python Virtual Environments
+
+---
+
+## 🏗️ Architecture Overview
+
+```mermaid
+graph TD
+    A[Admin Dashboard] <--> B[FastAPI Backend]
+    B <--> C[(PostgreSQL/PostGIS)]
+    B <--> D[Redis Pub/Sub]
+    B --> E[Simulation Engine]
+    E --> F[Ripple Effect Engine]
+    E --> G[Battery Manager]
+    B --> H[Hybrid ML Predictor]
+    H --> I[XGBoost Model]
+    H --> J[LSTM Trend Mock]
 ```
-transit-sync/
-├── backend/
-│   ├── main.py                    # FastAPI app + all API routes + WebSocket endpoints
-│   ├── requirements.txt
-│   ├── .env
-│   ├── db/
-│   │   ├── models.py              # SQLAlchemy models (PostGIS Geography columns)
-│   │   └── init_db.py             # DB init + seed data (15 stations, 20 drivers, GTFS trains)
-│   ├── ml/
-│   │   └── demand_predictor.py    # Hybrid XGBoost + LSTM demand predictor
-│   └── services/
-│       ├── websocket_manager.py   # WS connection manager (driver/passenger/admin rooms)
-│       ├── geofence_engine.py     # PostGIS ST_DWithin queries + driver ranking
-│       ├── fleet_optimizer.py     # Greedy assignment + surge rebalancing + real-time match
-│       └── gtfs_service.py        # GTFS feed parser + train simulation
-├── frontend/
-│   ├── src/
-│   │   ├── App.js                 # Router with Nav
-│   │   ├── index.css              # Global dark theme CSS
-│   │   ├── utils/api.js           # All API/WS calls
-│   │   └── pages/
-│   │       ├── CustomerPage.jsx   # Ride request + live map + driver tracking
-│   │       ├── DriverPage.jsx     # Hotspot alerts + navigation + earnings
-│   │       └── AdminPage.jsx      # Heatmap + fleet table + analytics + simulation
-│   └── public/index.html
-├── docker-compose.yml             # PostgreSQL+PostGIS + Redis
-├── start.sh                       # One-command startup
-└── README.md
+
+---
+
+## 🚀 Installation & Setup
+
+### 1. Prerequisites
+- Docker & Docker Compose
+- Python 3.10+
+- Node.js 18+
+
+### 2. Environment Configuration
+Create a `.env` file in the `backend/` directory:
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/transit_sync
+REDIS_URL=redis://localhost:6379/0
+SECRET_KEY=your_secret_key
 ```
 
----
-
-## ⚡ Quick Start (3 Steps)
-
-### Prerequisites
-- **Docker + Docker Compose** (for PostgreSQL/PostGIS)
-- **Python 3.10+**
-- **Node.js 18+**
-
----
-
-### Step 1 — Start Database
-
+### 3. Database Initialization
+Run the database setup script to create tables and seed initial data:
 ```bash
-cd transit-sync
+cd backend
+python db/init_db.py
+```
+
+### 4. Running the Project
+Use Docker Compose to start the database and Redis services:
+```bash
 docker-compose up -d
 ```
 
-Wait ~10s for PostgreSQL to initialize, then verify:
-```bash
-docker logs transit_postgres | tail -5
-# Should show: database system is ready to accept connections
-```
-
----
-
-### Step 2 — Start Backend
-
+Start the **Backend**:
 ```bash
 cd backend
-
-# Create virtualenv and install deps
-python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# Initialize DB with PostGIS + seed data
-python3 db/init_db.py
-
-# Start FastAPI server
+venv\Scripts\activate
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-✅ Backend at: http://localhost:8000  
-✅ API Docs: http://localhost:8000/docs  
-✅ Health: http://localhost:8000/health  
-
----
-
-### Step 3 — Start Frontend
-
-Open a new terminal:
+Start the **Frontend**:
 ```bash
-cd transit-sync/frontend
-npm install --legacy-peer-deps
-npm start
-```
-
-✅ Frontend at: http://localhost:3000
-
----
-
-### Or use the one-command script:
-```bash
-chmod +x start.sh
-./start.sh
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
 
-## 🌐 Web Interfaces
+## 🎮 Demo Instructions
 
-| Interface | URL | Description |
-|-----------|-----|-------------|
-| 🧍 **Passenger** | http://localhost:3000/customer | Request rides, track driver in real-time |
-| 🚗 **Driver** | http://localhost:3000/driver | Receive hotspot alerts, navigate, toggle availability |
-| 📊 **Admin** | http://localhost:3000/admin | Heatmap, fleet table, analytics, simulation |
-
----
-
-## 🔌 Key API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/gtfs/trains` | Live train ETAs |
-| POST | `/api/gtfs/simulate` | Simulate train arrival at a station |
-| POST | `/api/predict/demand` | ML demand prediction for a station |
-| GET | `/api/predict/all-stations` | Predict demand at all stations |
-| GET | `/api/drivers` | List all drivers with live positions |
-| GET | `/api/drivers/nearby?lat=&lon=&radius_km=` | PostGIS geofence query |
-| POST | `/api/drivers/location` | Update driver GPS position |
-| POST | `/api/drivers/toggle` | Toggle driver online/offline |
-| GET | `/api/hotspots` | Get active demand hotspots |
-| POST | `/api/hotspots/trigger` | Trigger prediction + create hotspot |
-| POST | `/api/fleet/optimize` | Run fleet pre-positioning algorithm |
-| POST | `/api/rides/request` | Passenger requests a ride |
-| GET | `/api/admin/dashboard` | Aggregated dashboard stats |
-| WS | `/ws/driver/{id}` | Driver real-time channel |
-| WS | `/ws/passenger/{id}` | Passenger tracking channel |
-| WS | `/ws/admin` | Admin broadcast channel |
-
----
-
-## 🤖 ML Architecture
-
+### 1. Trigger a Disruption
+Simulate a breakdown at Pune Railway Station to see the ripple effect in action:
+```powershell
+Invoke-RestMethod -Uri http://localhost:8000/api/simulate/disruption -Method POST -ContentType "application/json" -Body '{"station_id": "PUNE_STATION", "intensity": 0.5}'
 ```
-Input Features:
-  station_id (encoded), hour (cyclic sin/cos),
-  day_of_week (cyclic), delay_minutes, weather (encoded),
-  month, is_weekend
 
-XGBoost Model (75% weight):
-  - 200 estimators, max_depth=6
-  - Trained on 3000 synthetic historical samples
-  - Outputs: predicted passenger count
+### 2. Register a New Driver
+```powershell
+Invoke-RestMethod -Uri http://localhost:8000/api/drivers -Method POST -ContentType "application/json" -Body '{"name":"Tester Joe", "vehicle_type":"cab", "lat":18.52, "lon":73.85}'
+```
 
-LSTM Mock (25% trend weight):
-  - Exponential smoothing over last 48 time-steps
-  - Captures recent demand trends
-  - Outputs: trend multiplier (0.7–1.4)
-
-Final = XGBoost_pred × (0.75 + 0.25 × LSTM_trend)
+### 3. Book a Ride
+```powershell
+Invoke-RestMethod -Uri http://localhost:8000/api/rides/request -Method POST -ContentType "application/json" -Body '{"passenger_name":"John Doe", "pickup_lat":18.53, "pickup_lon":73.86}'
 ```
 
 ---
 
-## 🗄️ Database Schema
-
-```sql
--- PostGIS Geography columns with GIST indexes
-stations          (id, name, location GEOGRAPHY(Point,4326), lat, lon, zone)
-drivers_live      (id, name, vehicle_type, location GEOGRAPHY(Point,4326), lat, lon,
-                   is_online, is_available, rating, idle_since, assigned_hotspot)
-hotspots_predicted(id, station_id, location GEOGRAPHY(Point,4326), lat, lon,
-                   predicted_passengers, time_window_start, time_window_end, confidence)
-ride_requests     (id, passenger_name, pickup_location, status, driver_id, wait_time_seconds)
-gtfs_trains       (trip_id, route_id, station_id, scheduled_arrival, estimated_arrival,
-                   delay_minutes, passenger_load, status)
-```
+## 🔮 Future Scope
+-   **Routing Engine Integration**: Integration with OSRM or Google Maps API for real-time traffic-aware navigation.
+-   **Driver Mobile App**: Dedicated interface for drivers to receive repositioning requests and manage charging.
+-   **Advanced ML Training**: Moving from static weights to a globally trained LSTM model using real historical transit data.
+-   **Dynamic Pricing**: Surge pricing implementation based on ripple intensity.
 
 ---
 
-## 🎮 Demo Flow (Try This!)
-
-1. **Open Admin Dashboard** → http://localhost:3000/admin
-2. **Simulate a train arrival** → Select station, set 200 passengers, click "Simulate Arrival"
-3. Watch the **Live Event Feed** — demand prediction fires, hotspot created, drivers notified
-4. Click **"Optimize Fleet"** → Watch drivers get assigned to hotspot
-5. Switch to **Driver page** → Go online, see hotspot alert, click "Navigate Here"
-6. Switch to **Passenger page** → Click on map, enter name, request ride
-7. Back to **Admin → Analytics** tab → See charts update in real-time
-
----
-
-## 🚀 Hackathon Features Checklist
-
-- [x] GTFS + GTFS-Realtime (mock) with ETAs
-- [x] XGBoost demand prediction (trained on synthetic data)
-- [x] LSTM pattern trend (mock implementation)
-- [x] PostgreSQL + PostGIS with GEOGRAPHY columns + GIST indexes
-- [x] PostGIS ST_DWithin geofence queries
-- [x] WebSocket real-time notifications (driver/passenger/admin rooms)
-- [x] Greedy fleet pre-positioning algorithm
-- [x] Surge rebalancing (5km → 8km expansion)
-- [x] Real-time ride matching (distance + wait_time + rating scoring)
-- [x] 3 web interfaces (Customer, Driver, Admin)
-- [x] Leaflet.js interactive maps
-- [x] Demand heatmap visualization
-- [x] Train simulation with demand prediction trigger
-- [x] Fleet analytics with Recharts
-
----
-
-## 🔧 Troubleshooting
-
-**DB connection refused:**
-```bash
-docker-compose ps          # check containers running
-docker-compose logs postgres
-```
-
-**XGBoost install fails:**
-```bash
-pip install xgboost --pre  # try pre-release
-# OR: The system uses a rule-based fallback automatically
-```
-
-**Frontend can't reach backend:**
-- Ensure backend is on port 8000
-- Check CORS — backend allows `*` origins in dev mode
-- Verify: `curl http://localhost:8000/health`
-
-**Port already in use:**
-```bash
-lsof -i :8000 | awk 'NR>1{print $2}' | xargs kill  # free port 8000
-lsof -i :3000 | awk 'NR>1{print $2}' | xargs kill  # free port 3000
-```
+Made with ❤️ by the **TechWizard Team** (LucidStack-code).

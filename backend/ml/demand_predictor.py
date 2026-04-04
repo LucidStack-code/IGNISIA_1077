@@ -166,34 +166,131 @@ class XGBoostDemandModel:
 # ── LSTM Pattern Mock ────────────────────────────────────────────────────────
 class LSTMPatternMock:
     """
-    Mock LSTM that captures temporal patterns via exponential smoothing
-    and historical sequence simulation — mimics LSTM output
+    Mock LSTM-like trend detector.
+    In production, this would be a real LSTM model trained on sequential demand data.
+    Here we simulate trend multipliers based on time-of-day patterns.
     """
 
-    def __init__(self):
-        self.alpha = 0.3  # smoothing factor
-        self._history: Dict[str, List[float]] = {}
-
-    def update(self, station_id: str, actual_demand: float):
-        if station_id not in self._history:
-            self._history[station_id] = []
-        self._history[station_id].append(actual_demand)
-        if len(self._history[station_id]) > 48:  # keep 48 time-steps
-            self._history[station_id].pop(0)
+    TREND_PATTERNS = {
+        "PUNE_STATION": 1.15,
+        "SHIVAJINAGAR": 1.10,
+        "SWARGATE": 1.12,
+        "PCMC": 1.08,
+        "CHINCHWAD": 1.05,
+        "CIVIL_COURT": 1.07,
+    }
 
     def predict_trend_multiplier(self, station_id: str) -> float:
-        """Returns trend multiplier based on recent history (1.0 = neutral)"""
-        hist = self._history.get(station_id, [])
-        if len(hist) < 4:
-            return 1.0
-        recent = hist[-4:]
-        older = hist[-8:-4] if len(hist) >= 8 else recent
-        recent_avg = np.mean(recent)
-        older_avg = np.mean(older)
-        if older_avg == 0:
-            return 1.0
-        trend = recent_avg / older_avg
-        return float(np.clip(trend, 0.7, 1.4))
+        base = self.TREND_PATTERNS.get(station_id, 1.0)
+        hour = datetime.utcnow().hour
+        # Add time-based variation
+        if hour in [7, 8, 9]:
+            base *= random.uniform(1.05, 1.15)
+        elif hour in [17, 18, 19]:
+            base *= random.uniform(1.08, 1.20)
+        else:
+            base *= random.uniform(0.90, 1.05)
+        return round(base, 3)
+
+
+def _peak_label(hour: int) -> str:
+    if hour in [7, 8, 9]:
+        return "morning_peak"
+    elif hour in [17, 18, 19]:
+        return "evening_peak"
+    elif 10 <= hour <= 16:
+        return "off_peak"
+    else:
+        return "night"
+
+
+# ── Ripple Effect Engine (Twist 1) ──────────────────────────────────────────
+class RippleEffectEngine:
+    """
+    Simulates "contagion" demand: disruptions at one station propagate to others.
+    """
+    # Pune Metro L1 (Purple Line) and future connections
+    STATION_ADJACENCY = {
+        "PCMC": ["SANT_TUKARAM"],
+        "SANT_TUKARAM": ["PCMC", "BHOSARI"],
+        "BHOSARI": ["SANT_TUKARAM", "KASARWADI"],
+        "KASARWADI": ["BHOSARI", "PIMPRI"],
+        "PIMPRI": ["KASARWADI", "CHINCHWAD"],
+        "CHINCHWAD": ["PIMPRI", "AKURDI"],
+        "AKURDI": ["CHINCHWAD", "NIGDI"],
+        "NIGDI": ["AKURDI"],
+        
+        "PUNE_STATION": ["RUBY_HALL", "CIVIL_COURT"],
+        "RUBY_HALL": ["PUNE_STATION"],
+        "CIVIL_COURT": ["PUNE_STATION", "SHIVAJINAGAR", "SWARGATE"],
+        "SHIVAJINAGAR": ["CIVIL_COURT", "RANGE_HILLS"],
+        "RANGE_HILLS": ["SHIVAJINAGAR"],
+        "SWARGATE": ["CIVIL_COURT", "MARKET_YARD"],
+        "MARKET_YARD": ["SWARGATE"],
+    }
+
+    def __init__(self):
+        # {station_id: {start_time: datetime, intensity: float}}
+        self.active_disruptions = {}
+
+    def trigger_disruption(self, station_id: str, intensity: float = 0.5):
+        self.active_disruptions[station_id] = {
+            "start_time": datetime.utcnow(),
+            "intensity": intensity
+        }
+
+    def clear_disruption(self, station_id: str):
+        if station_id in self.active_disruptions:
+            del self.active_disruptions[station_id]
+
+    def _get_distance_in_graph(self, start: str, end: str, max_depth: int = 3) -> int:
+        """Simple BFS to find distance between station nodes"""
+        if start == end: return 0
+        queue = [(start, 0)]
+        visited = {start}
+        while queue:
+            node, dist = queue.pop(0)
+            if dist >= max_depth: continue
+            for neighbor in self.STATION_ADJACENCY.get(node, []):
+                if neighbor == end: return dist + 1
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, dist + 1))
+        return 99
+
+    def get_ripple_multiplier(self, station_id: str, target_time: datetime) -> float:
+        """
+        Calculates a demand multiplier based on network disruptions.
+        Propagates demand downstream with time delay:
+        - 1 hop away: +50% surge 20-40 mins later
+        - 2 hops away: +30% surge 40-60 mins later
+        """
+        multiplier = 1.0
+        now = datetime.utcnow()
+        
+        for disc_id, info in self.active_disruptions.items():
+            dist = self._get_distance_in_graph(disc_id, station_id)
+            if dist == 0:
+                # Direct disruption: Initially low demand (blocked), then high (restart)
+                # For simulation, we assume STRANDED passengers = High Demand for last mile
+                multiplier *= (1.0 + info["intensity"] * 2.0)
+                continue
+            
+            if dist > 3: continue
+            
+            # Time since disruption in minutes
+            delta_mins = (target_time - info["start_time"]).total_seconds() / 60
+            
+            # Propagation logic: 15-20 mins per hop
+            min_delay = dist * 15
+            max_delay = dist * 30 + 15
+            
+            if min_delay <= delta_mins <= max_delay:
+                # Demand surge propagates!
+                surge = info["intensity"] * (1.5 / dist)
+                multiplier *= (1.0 + surge)
+                
+        return round(multiplier, 2)
 
 
 # ── Hybrid Predictor ─────────────────────────────────────────────────────────
@@ -204,9 +301,10 @@ class HybridDemandPredictor:
     """
 
     def __init__(self):
-        print("🤖 Initializing Hybrid ML Demand Predictor...")
+        print("🤖 Initializing Hybrid ML Demand Predictor with Ripple Engine...")
         self.xgb_model = XGBoostDemandModel()
         self.lstm_mock = LSTMPatternMock()
+        self.ripple_engine = RippleEffectEngine()
         print("✅ Hybrid Demand Predictor ready")
 
     def predict(
@@ -226,24 +324,27 @@ class HybridDemandPredictor:
             station_id, hour, dow, delay_minutes, weather, month
         )
         lstm_trend = self.lstm_mock.predict_trend_multiplier(station_id)
+        ripple_mult = self.ripple_engine.get_ripple_multiplier(station_id, target_time)
 
-        # Hybrid: 75% XGBoost + 25% trend adjustment
-        hybrid_pred = int(xgb_pred * (0.75 + 0.25 * lstm_trend))
+        # Hybrid: 75% XGBoost + 25% trend adjustment * Ripple multiplier
+        hybrid_pred = int(xgb_pred * (0.75 + 0.25 * lstm_trend) * ripple_mult)
 
-        # Confidence based on hour (peak hours = higher confidence)
+        # Confidence based on hour and ripple
+        confidence = 0.90
+        if ripple_mult > 1.2: confidence *= 0.8 # More uncertainty during ripples
+        
         if hour in [7, 8, 9, 17, 18, 19]:
-            confidence = round(random.uniform(0.85, 0.95), 2)
-        elif 10 <= hour <= 16:
-            confidence = round(random.uniform(0.75, 0.88), 2)
+            confidence *= random.uniform(0.9, 1.0)
         else:
-            confidence = round(random.uniform(0.60, 0.78), 2)
+            confidence *= random.uniform(0.7, 0.9)
 
         return {
             "station_id": station_id,
-            "predicted_passengers": hybrid_pred,
+            "predicted_passengers": max(5, hybrid_pred),
             "xgboost_estimate": xgb_pred,
             "lstm_trend_multiplier": round(lstm_trend, 3),
-            "confidence": confidence,
+            "ripple_multiplier": ripple_mult,
+            "confidence": round(confidence, 2),
             "time_window_start": target_time.isoformat(),
             "time_window_end": (target_time + timedelta(minutes=15)).isoformat(),
             "weather": weather,

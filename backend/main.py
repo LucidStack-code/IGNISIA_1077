@@ -25,9 +25,10 @@ try:
     from services.geofence_engine import (
         query_drivers_near_hotspot, query_all_drivers, update_driver_location,
         toggle_driver_availability, assign_driver_to_hotspot,
-        upsert_hotspot, get_active_hotspots
+        upsert_hotspot, get_active_hotspots, update_driver_battery, get_charging_hubs,
+        create_driver
     )
-    from services.fleet_optimizer import greedy_assignment, surge_rebalance, real_time_match
+    from services.fleet_optimizer import greedy_assignment, surge_rebalance, real_time_match, proactive_rebalance_future
     from services.gtfs_service import (
         get_live_trains, get_station_eta, simulate_train_arrival, get_gtfs_feed_summary
     )
@@ -71,6 +72,19 @@ class OptimizeFleet(BaseModel):
     radius_km: float = 5.0
     surge_mode: bool = False
 
+class DriverCreateBody(BaseModel):
+    name: str
+    vehicle_type: str
+    lat: float
+    lon: float
+
+class DisruptionBody(BaseModel):
+    station_id: str
+    intensity: float = 0.5
+
+class ClearDisruptionBody(BaseModel):
+    station_id: str
+
 
 # ── App Lifecycle ────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -108,19 +122,68 @@ async def background_simulation():
             if not DB_AVAILABLE:
                 continue
 
-            drivers = query_all_drivers()
-            if not drivers:
-                continue
-
-            # Randomly move a few online/available drivers to show life
-            online_drivers = [d for d in drivers if d.get("is_online") and d.get("is_available")]
+            # ── Battery & Movement Simulation (Twist 2) ────────────────────────
+            all_drivers = query_all_drivers()
+            hubs = get_charging_hubs()
             updated_count = 0
-            for d in random.sample(online_drivers, min(len(online_drivers), 6)):
-                # Jitter lat/lon by ~10-20 meters
-                new_lat = d["lat"] + random.uniform(-0.0002, 0.0002)
-                new_lon = d["lon"] + random.uniform(-0.0002, 0.0002)
-                if update_driver_location(d["id"], new_lat, new_lon):
+            
+            for d in all_drivers:
+                if not d.get("is_online"): continue
+                
+                battery = d.get("battery_level", 1.0)
+                is_available = d.get("is_available")
+                is_charging = d.get("is_charging", False)
+                
+                # 1. Deplete battery
+                if not is_charging:
+                    # Deplete faster if busy (on trip), slower if idle
+                    depletion = random.uniform(0.002, 0.005) if not is_available else random.uniform(0.0005, 0.001)
+                    battery = max(0.0, battery - depletion)
+                
+                # 2. Charging Logic
+                if battery < 0.15 and is_available and not is_charging:
+                    # Low battery! Find nearest hub
+                    nearest_hub = None
+                    min_dist = float('inf')
+                    for h in hubs:
+                        dist = ((d['lat']-h['lat'])**2 + (d['lon']-h['lon'])**2)**0.5
+                        if dist < min_dist:
+                            min_dist = dist
+                            nearest_hub = h
+                    
+                    if nearest_hub:
+                        # Move towards hub (0.001 deg ~ 100m)
+                        step = 0.002
+                        new_lat = d["lat"] + (1 if nearest_hub["lat"] > d["lat"] else -1) * min(step, abs(nearest_hub["lat"] - d["lat"]))
+                        new_lon = d["lon"] + (1 if nearest_hub["lon"] > d["lon"] else -1) * min(step, abs(nearest_hub["lon"] - d["lon"]))
+                        
+                        # If reached hub
+                        if min_dist < 0.001:
+                            is_charging = True
+                            battery = min(1.0, battery + 0.05) # Charge 5% per tick
+                        
+                        update_driver_location(d["id"], new_lat, new_lon)
+                        update_driver_battery(d["id"], battery, is_charging)
+                        updated_count += 1
+                        continue
+
+                if is_charging:
+                    battery = min(1.0, battery + 0.08)
+                    if battery >= 0.95: is_charging = False
+                    update_driver_battery(d["id"], battery, is_charging)
                     updated_count += 1
+                    continue
+
+                # 3. Normal Jitter for available drivers
+                if is_available and random.random() > 0.7:
+                    new_lat = d["lat"] + random.uniform(-0.0003, 0.0003)
+                    new_lon = d["lon"] + random.uniform(-0.0003, 0.0003)
+                    update_driver_location(d["id"], new_lat, new_lon)
+                    update_driver_battery(d["id"], battery, is_charging)
+                    updated_count += 1
+                else:
+                    # Just update battery
+                    update_driver_battery(d["id"], battery, is_charging)
 
             # Broadcast ALL driver positions to admins
             refreshed_drivers = query_all_drivers()
@@ -161,6 +224,30 @@ def gtfs_summary():
         return {"total_active_trains": 5, "delayed_trains": 1, "on_time_trains": 4,
                 "avg_delay_minutes": 1.2, "trains": []}
     return get_gtfs_feed_summary()
+
+
+@app.post("/api/simulate/disruption")
+async def trigger_disruption(body: DisruptionBody):
+    station_id = body.station_id
+    intensity = body.intensity
+    predictor = get_predictor()
+    predictor.ripple_engine.trigger_disruption(station_id, intensity)
+    
+    await manager.broadcast_to_admins({
+        "type": "DISRUPTION_TRIGGERED",
+        "station_id": station_id,
+        "intensity": intensity,
+        "message": f"🚨 Breakdown at {station_id}! Ripple demand expected downstream."
+    })
+    return {"status": "ok", "station_id": station_id}
+
+
+@app.post("/api/simulate/clear")
+async def clear_disruption(body: ClearDisruptionBody):
+    station_id = body.station_id
+    predictor = get_predictor()
+    predictor.ripple_engine.clear_disruption(station_id)
+    return {"status": "cleared", "station_id": station_id}
 
 
 @app.post("/api/trains/simulate")
@@ -349,8 +436,21 @@ async def optimize_fleet(body: OptimizeFleet):
         return {"assignments": [], "coverage": 1.0, "message": "No active hotspots"}
 
     if body.surge_mode:
-        assignments, coverage, radius = surge_rebalance(drivers, hotspots)
-        result_msg = f"🚨 Surge mode: expanded to {radius:.1f}km radius"
+        # Twist 1: Proactive rebalancing for future surges (T+30)
+        predictor = get_predictor()
+        future_hotspots = []
+        for h in hotspots:
+            # Predict demand at this station 30 mins from now
+            f_pred = predictor.predict(h["station_id"], minutes_until_arrival=30)
+            future_hotspots.append({
+                "station_id": h["station_id"],
+                "lat": h["lat"], "lon": h["lon"],
+                "predicted_passengers": f_pred["predicted_passengers"]
+            })
+        
+        assignments = proactive_rebalance_future(drivers, future_hotspots)
+        coverage = len(assignments) / max(1, len(future_hotspots))
+        result_msg = f"🚀 Proactive Surge Mode: Pre-positioned for T+30 demand"
     else:
         assignments = greedy_assignment(drivers, hotspots, body.radius_km)
         coverage = len(assignments) / max(1, len(hotspots))
@@ -382,6 +482,32 @@ async def optimize_fleet(body: OptimizeFleet):
         "message": result_msg,
         "drivers_assigned": len(assignments),
     }
+
+
+@app.post("/api/drivers")
+async def create_driver_endpoint(body: DriverCreateBody):
+    from services.geofence_engine import create_driver
+    if not DB_AVAILABLE:
+        return {"status": "error", "message": "Database not available"}
+    
+    driver_id = f"DRV_{uuid.uuid4().hex[:8].upper()}"
+    success = create_driver(driver_id, body.name, body.vehicle_type, body.lat, body.lon)
+    
+    if success:
+        return {"status": "ok", "driver_id": driver_id}
+    else:
+        return {"status": "error", "message": "Failed to create driver"}
+
+
+@app.get("/api/hubs")
+def list_hubs():
+    from services.geofence_engine import get_charging_hubs
+    if not DB_AVAILABLE:
+        return {"hubs": [
+            {"id": 1, "name": "Pune Station Hub", "lat": 18.5280, "lon": 73.8735, "available_spots": 8},
+            {"id": 2, "name": "Shivajinagar Hub", "lat": 18.5315, "lon": 73.8480, "available_spots": 5},
+        ]}
+    return {"hubs": get_charging_hubs()}
 
 
 # ── Hotspots ──────────────────────────────────────────────────────────────────

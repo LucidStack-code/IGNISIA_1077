@@ -78,6 +78,15 @@ def setup_db():
     cur.execute("CREATE EXTENSION IF NOT EXISTS postgis_topology;")
     print("✅ PostGIS enabled")
 
+    # Drop tables to ensure fresh schema
+    cur.execute("DROP TABLE IF EXISTS ride_requests;")
+    cur.execute("DROP TABLE IF EXISTS hotspots_predicted;")
+    cur.execute("DROP TABLE IF EXISTS gtfs_trains;")
+    cur.execute("DROP TABLE IF EXISTS drivers_live;")
+    cur.execute("DROP TABLE IF EXISTS stations;")
+    cur.execute("DROP TABLE IF EXISTS charging_hubs;")
+    print("✅ Tables dropped (fresh start)")
+
     # Create tables
     cur.execute("""
         CREATE TABLE IF NOT EXISTS stations (
@@ -106,10 +115,26 @@ def setup_db():
             rating FLOAT DEFAULT 4.5,
             idle_since TIMESTAMP DEFAULT NOW(),
             assigned_hotspot VARCHAR,
+            battery_level FLOAT DEFAULT 1.0,
+            is_charging BOOLEAN DEFAULT FALSE,
             updated_at TIMESTAMP DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS idx_drivers_location ON drivers_live USING GIST(location);
         CREATE INDEX IF NOT EXISTS idx_drivers_available ON drivers_live(is_available, is_online);
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS charging_hubs (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            location GEOGRAPHY(Point, 4326),
+            lat FLOAT,
+            lon FLOAT,
+            capacity INTEGER DEFAULT 10,
+            available_spots INTEGER DEFAULT 10,
+            is_active BOOLEAN DEFAULT TRUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hubs_location ON charging_hubs USING GIST(location);
     """)
 
     cur.execute("""
@@ -177,6 +202,21 @@ def setup_db():
               s["zone"], random.randint(3000, 12000)))
     print(f"✅ Seeded {len(STATIONS)} stations")
 
+    # Seed Charging Hubs
+    cur.execute("DELETE FROM charging_hubs;")
+    HUBS = [
+        {"name": "Pune Station Hub", "lat": 18.5280, "lon": 73.8735},
+        {"name": "Shivajinagar Hub", "lat": 18.5315, "lon": 73.8480},
+        {"name": "Swargate Hub", "lat": 18.5020, "lon": 73.8530},
+        {"name": "PCMC Hub", "lat": 18.6270, "lon": 73.8000},
+    ]
+    for h in HUBS:
+        cur.execute("""
+            INSERT INTO charging_hubs (name, location, lat, lon, capacity, available_spots)
+            VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s, 10, 10)
+        """, (h["name"], h["lon"], h["lat"], h["lat"], h["lon"]))
+    print(f"✅ Seeded {len(HUBS)} charging hubs")
+
     # Seed drivers around Pune
     cur.execute("DELETE FROM drivers_live;")
     base_lat, base_lon = 18.5726, 73.8546  # Pune center
@@ -185,13 +225,26 @@ def setup_db():
         lat = base_lat + random.uniform(-0.08, 0.08)
         lon = base_lon + random.uniform(-0.08, 0.08)
         driver_id = f"DRV_{i+1:03d}"
+        
+        # Twist 2: Random initial battery levels
+        battery = round(random.uniform(0.3, 1.0), 2)
+        if i % 5 == 0: battery = 0.18 # Some low battery drivers for testing
+        
         cur.execute("""
-            INSERT INTO drivers_live (id, name, vehicle_type, location, lat, lon, is_online, is_available, rating, idle_since)
-            VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s, %s, %s, %s, %s)
-        """, (driver_id, name, vehicle, lon, lat, lat, lon,
-              True, True, round(random.uniform(3.8, 5.0), 1),
-              datetime.utcnow() - timedelta(minutes=random.randint(1, 60))))
-    print(f"✅ Seeded {len(DRIVER_NAMES)} drivers")
+            INSERT INTO drivers_live (
+                id, name, vehicle_type, lat, lon, location, 
+                is_online, is_available, rating, idle_since, battery_level
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326),
+                %s, %s, %s, %s, %s
+            )
+        """, (
+            driver_id, name, vehicle, lat, lon, lon, lat,
+            True, True, round(random.uniform(3.8, 5.0), 1),
+            datetime.utcnow() - timedelta(minutes=random.randint(1, 60)), battery
+        ))
+    print(f"✅ Seeded {len(DRIVER_NAMES)} drivers with battery levels")
 
     # Seed GTFS trains
     cur.execute("DELETE FROM gtfs_trains;")

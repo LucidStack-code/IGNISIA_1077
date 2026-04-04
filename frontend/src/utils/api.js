@@ -19,6 +19,11 @@ async function api(path, opts = {}) {
 export const getAdminDashboard  = ()             => api('/admin/dashboard');
 export const getRideStats       = ()             => api('/rides/stats');
 export const getGtfsSummary     = ()             => api('/gtfs/summary');
+export const triggerDisruption  = (stationId, intensity = 0.5) => 
+  api('/simulate/disruption', { method: 'POST', body: JSON.stringify({ station_id: stationId, intensity }) });
+export const clearDisruption    = (stationId)    => 
+  api('/simulate/clear', { method: 'POST', body: JSON.stringify({ station_id: stationId }) });
+export const getHubs           = ()             => api('/hubs');
 
 // ── Drivers ──────────────────────────────────────────────────────────────────
 export const getDrivers         = ()             => api('/drivers');
@@ -30,7 +35,7 @@ export const toggleDriver       = (driverId, online) =>
 
 // ── Hotspots & Predictions ───────────────────────────────────────────────────
 export const getHotspots        = ()             => api('/hotspots');
-export const predictAllStations = ()             => api('/predict/all');
+export const predictAllStations = (offset = 10)  => api(`/predict/all?minutes_until_arrival=${offset}`);
 export const triggerHotspot     = (stationId, radius = 10, delay = 0) =>
   api('/hotspots/trigger', { method: 'POST', body: JSON.stringify({ station_id: stationId, radius_km: radius, delay_minutes: delay }) });
 

@@ -4,8 +4,8 @@ import L from 'leaflet';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
 import {
   getAdminDashboard, getDrivers, getHotspots, predictAllStations,
-  getTrains, optimizeFleet, simulateArrival, triggerHotspot,
-  createAdminWebSocket, getRideStats, getGtfsSummary
+  getTrains, optimizeFleet, simulateArrival, triggerDisruption,
+  createAdminWebSocket, getRideStats, getGtfsSummary, getHubs
 } from '../utils/api';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -85,6 +85,12 @@ export default function AdminPage() {
   const [simLoad, setSimLoad] = useState(200);
   const [loading, setLoading] = useState({});
   const [surgeMode, setSurgeMode] = useState(false);
+  const [timeline, setTimeline] = useState(0); // 0 | 30 | 60 (minutes)
+  const [activeDisruption, setActiveDisruption] = useState(null);
+  const [disruptionStation, setDisruptionStation] = useState('PUNE_STATION');
+  const [disruptionIntensity, setDisruptionIntensity] = useState(0.5);
+  const [hubs, setHubs] = useState([]);
+  const [showHeatmap, setShowHeatmap] = useState(true);
   const wsRef = useRef(null);
 
   const setLoad = (key, val) => setLoading(l => ({ ...l, [key]: val }));
@@ -97,14 +103,15 @@ export default function AdminPage() {
   // Load all data
   const loadData = useCallback(async () => {
     try {
-      const [driverRes, hotspotRes, predRes, trainRes, dashRes, rideRes] = await Promise.allSettled([
-        getDrivers(), getHotspots(), predictAllStations(), getTrains(), getAdminDashboard(), getRideStats()
+      const [driverRes, hotspotRes, predRes, trainRes, dashRes, rideRes, hubRes] = await Promise.allSettled([
+        getDrivers(), getHotspots(), predictAllStations(timeline), getTrains(), getAdminDashboard(), getRideStats(), getHubs()
       ]);
       if (driverRes.status === 'fulfilled') setDrivers(driverRes.value.drivers || MOCK_DRIVERS);
       if (hotspotRes.status === 'fulfilled') setHotspots(hotspotRes.value.hotspots || []);
       if (predRes.status === 'fulfilled') setPredictions(predRes.value.predictions || []);
       if (trainRes.status === 'fulfilled') setTrains((trainRes.value.trains || []).slice(0, 8));
       if (dashRes.status === 'fulfilled') setDashboard(dashRes.value);
+      if (hubRes.status === 'fulfilled') setHubs(hubRes.value.hubs || []);
       if (rideRes.status === 'fulfilled') {
         const stats = rideRes.value || {};
         setRideStats({
@@ -117,13 +124,13 @@ export default function AdminPage() {
         });
       }
     } catch {}
-  }, []);
+  }, [timeline]);
 
   useEffect(() => {
     loadData();
     const t = setInterval(loadData, 12000);
     return () => clearInterval(t);
-  }, [loadData]);
+  }, [loadData, timeline]);
 
   // WebSocket admin channel
   useEffect(() => {
@@ -146,6 +153,11 @@ export default function AdminPage() {
             break;
           case 'FLEET_OPTIMIZED':
             addEvent(`✅ Fleet optimized: ${data.assignments?.length} assignments, ${Math.round((data.coverage || 0) * 100)}% coverage`, 'success');
+            break;
+          case 'DISRUPTION_TRIGGERED':
+            addEvent(data.message, 'danger');
+            setActiveDisruption(data.station_id);
+            loadData();
             break;
           case 'RIDE_MATCHED':
             addEvent(`🎯 Ride matched: ${data.request_id} → Driver ${data.driver_id}`, 'success');
@@ -191,24 +203,26 @@ export default function AdminPage() {
     setLoad('simulate', true);
     try {
       const result = await simulateArrival(simStation, parseFloat(simDelay), parseInt(simLoad));
-      addEvent(`🚆 Simulated train at ${simStation}: ${simLoad} passengers, ${simDelay}min delay`, 'info');
-      // Also trigger hotspot
-      await triggerHotspot(simStation, 10, parseFloat(simDelay));
+      addEvent(`🚆 Simulated train at ${simStation}: ${simLoad} passengers`, 'info');
       await loadData();
     } catch {
-      addEvent('Simulation done (mock mode)', 'info');
-      // Add mock hotspot for demo
-      setHotspots(h => [...h, {
-        id: Date.now(), station_id: simStation,
-        station_name: STATIONS.find(s => s.id === simStation)?.name || simStation,
-        lat: STATIONS.find(s => s.id === simStation)?.lat || 18.5295,
-        lon: STATIONS.find(s => s.id === simStation)?.lon || 73.8740,
-        predicted_passengers: Math.round(parseInt(simLoad) * 0.7),
-        confidence: 0.85,
-      }]);
-      addEvent(`🔥 Hotspot created at ${simStation}`, 'warning');
+      addEvent('Simulation failed', 'danger');
     } finally {
       setLoad('simulate', false);
+    }
+  };
+
+  const handleTriggerDisruption = async () => {
+    setLoad('disruption', true);
+    try {
+      await triggerDisruption(disruptionStation, parseFloat(disruptionIntensity));
+      addEvent(`🚨 DISRUPTION TRIGGERED: ${disruptionStation} (Intensity: ${disruptionIntensity})`, 'danger');
+      setActiveDisruption(disruptionStation);
+      await loadData();
+    } catch {
+      addEvent('Failed to trigger disruption', 'danger');
+    } finally {
+      setLoad('disruption', false);
     }
   };
 
@@ -304,6 +318,36 @@ export default function AdminPage() {
           </button>
         </div>
 
+        {/* Twist 1: Simulation & Disruptions */}
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8, background: 'rgba(255, 23, 68, 0.05)' }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-red)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>🚨 Simulation: Disruptions</div>
+          
+          <select className="input" style={{ fontSize: 12, padding: '7px 10px', borderColor: 'var(--accent-red)' }} 
+                  value={disruptionStation} onChange={e => setDisruptionStation(e.target.value)}>
+            {STATIONS.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>INTENSITY</span>
+            <input type="range" min="0.1" max="1.0" step="0.1" value={disruptionIntensity} 
+                   onChange={e => setDisruptionIntensity(e.target.value)} 
+                   style={{ flex: 1, accentColor: 'var(--accent-red)' }} />
+            <span style={{ fontSize: 11, color: 'var(--accent-red)', fontWeight: 700 }}>{disruptionIntensity}</span>
+          </div>
+          
+          <button className="btn" onClick={handleTriggerDisruption} disabled={loading.disruption}
+            style={{ width: '100%', justifyContent: 'center', fontSize: 13, background: 'var(--accent-red)', color: 'white' }}>
+            {loading.disruption ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Triggering...</> : '💥 Trigger Disruption'}
+          </button>
+          
+          {activeDisruption && (
+            <div style={{ fontSize: 10, color: 'var(--accent-red)', textAlign: 'center', fontWeight: 600 }}>
+              ⚠️ ACTIVE BREAKDOWN: {activeDisruption}
+              <div style={{ cursor: 'pointer', textDecoration: 'underline', marginTop: 2 }} onClick={() => setActiveDisruption(null)}>Clear</div>
+            </div>
+          )}
+        </div>
+
         {/* Live event feed */}
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '10px 16px 6px', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -351,6 +395,25 @@ export default function AdminPage() {
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: 'var(--text-muted)' }}>
             <span>🚆 {trains.length} trains tracked</span>
             <span>👥 ~{totalPredPax} pax predicted</span>
+            
+            {/* Timeline Slider */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-card)', padding: '4px 12px', borderRadius: 20, border: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 10, fontWeight: 700 }}>TIMELINE:</span>
+              {[0, 30, 60].map(m => (
+                <button key={m} onClick={() => setTimeline(m)} style={{
+                  padding: '2px 8px', border: 'none', borderRadius: 12, fontSize: 10, cursor: 'pointer',
+                  background: timeline === m ? 'var(--accent-blue)' : 'transparent',
+                  color: timeline === m ? 'white' : 'var(--text-muted)'
+                }}>
+                  +{m}m
+                </button>
+              ))}
+            </div>
+
+            <div onClick={() => setShowHeatmap(!showHeatmap)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: showHeatmap ? 'var(--accent-orange)' : 'var(--text-muted)' }}>
+              {showHeatmap ? '🏮 Heatmap ON' : '⚪ Heatmap OFF'}
+            </div>
+
             <span style={{ fontFamily: 'var(--font-mono)', background: 'var(--bg-card)', padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', color: 'var(--accent-teal)' }}>
               {new Date().toLocaleTimeString()}
             </span>
@@ -371,18 +434,20 @@ export default function AdminPage() {
                     <div style={{ minWidth: 140 }}>
                       <strong>{d.name}</strong><br />
                       {d.vehicle_type} • ⭐{d.rating}<br />
+                      🔋 Battery: {Math.round((d.battery_level || 0) * 100)}%<br />
                       Status: {d.is_available ? '🟢 Available' : d.is_online ? '🟡 On Trip' : '🔴 Offline'}
+                      {d.battery_level < 0.2 && <div style={{ color: 'var(--accent-red)', fontWeight: 700, fontSize: 10, marginTop: 4 }}>⚠️ RESTRICTED (LOW BATT)</div>}
                     </div>
                   </Popup>
                 </Marker>
               ))}
 
-              {/* Hotspot heatmap circles */}
+               {/* Hotspot heatmap circles */}
               {hotspots.map(h => (
                 <React.Fragment key={h.id}>
                   <Circle center={[h.lat, h.lon]}
                     radius={600 + h.predicted_passengers * 8}
-                    pathOptions={{ color: '#ff1744', fillColor: '#ff1744', fillOpacity: 0.08 + Math.min(0.2, h.predicted_passengers / 2000) }} />
+                    pathOptions={{ color: '#ff1744', fillColor: '#ff1744', fillOpacity: 0.12 + Math.min(0.3, h.predicted_passengers / 1000) }} />
                   <Marker position={[h.lat, h.lon]} icon={makeIcon('🔥', 28)}>
                     <Popup>
                       <div>
@@ -395,18 +460,41 @@ export default function AdminPage() {
                 </React.Fragment>
               ))}
 
-              {/* Demand prediction circles */}
-              {predictions.map((p, i) => p.lat && (
-                <Circle key={i} center={[p.lat, p.lon]}
-                  radius={p.predicted_passengers * 3}
-                  pathOptions={{ color: '#00a8ff', fillOpacity: 0.04, weight: 1, dashArray: '4' }} />
+              {/* Demand prediction circles (Heatmap) */}
+              {showHeatmap && predictions.map((p, i) => p.lat && (
+                <Circle key={`pred-${i}`} center={[p.lat, p.lon]}
+                  radius={400 + (p.predicted_passengers * 6)}
+                  pathOptions={{ 
+                    color: p.ripple_multiplier > 1.2 ? 'var(--accent-red)' : 'var(--accent-blue)', 
+                    fillColor: p.ripple_multiplier > 1.2 ? 'var(--accent-red)' : 'var(--accent-blue)', 
+                    fillOpacity: 0.05 + Math.min(0.4, p.predicted_passengers / 500),
+                    weight: p.ripple_multiplier > 1.2 ? 2 : 1,
+                    dashArray: p.ripple_multiplier > 1.2 ? '5, 5' : null
+                  }} />
               ))}
 
               {/* Stations */}
               {STATIONS.map(s => (
-                <Marker key={s.id} position={[s.lat, s.lon]} icon={makeIcon('🚇', 22)}>
+                <Marker key={s.id} position={[s.lat, s.lon]} icon={makeIcon(activeDisruption === s.id ? '💥' : '🚇', activeDisruption === s.id ? 32 : 22)}>
                   <Popup>
-                    <div><strong>{s.name}</strong><br />Metro Station</div>
+                    <div>
+                      <strong>{s.name}</strong><br />
+                      Metro Station
+                      {activeDisruption === s.id && <div style={{ color: 'var(--accent-red)', fontWeight: 700 }}>⚠️ DISRUPTION ACTIVE</div>}
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
+
+              {/* Charging Hubs */}
+              {hubs.map(hub => (
+                <Marker key={`hub-${hub.id}`} position={[hub.lat, hub.lon]} icon={makeIcon('⚡', 24)}>
+                  <Popup>
+                    <div style={{ minWidth: 150 }}>
+                      <strong>🔋 {hub.name}</strong><br />
+                      Capacity: {hub.capacity}<br />
+                      Available: <span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{hub.available_spots} spots</span>
+                    </div>
                   </Popup>
                 </Marker>
               ))}
@@ -428,9 +516,17 @@ export default function AdminPage() {
 
             {/* Map Legend */}
             <div style={{ position: 'absolute', bottom: 24, right: 16, zIndex: 1000, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 16px', fontSize: 12 }}>
-              {[['🛺 🚕 🛵', 'Drivers (available)'], ['⬛', 'Driver (offline/busy)'], ['🔥', 'Demand Hotspot'], ['🚇', 'Metro Station'], ['🚆', 'Train (live)']].map(([icon, label]) => (
+              {[
+                ['🛺 🚕 🛵', 'Drivers (available)'], 
+                ['⬛', 'Driver (offline/busy)'], 
+                ['🔌', 'Driver (charging)'],
+                ['⚡', 'Charging Hub'],
+                ['🔥', 'Demand Hotspot'], 
+                ['🚇', 'Metro Station'], 
+                ['🚆', 'Train (live)']
+              ].map(([icon, label]) => (
                 <div key={label} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, color: 'var(--text-secondary)' }}>
-                  <span>{icon}</span><span>{label}</span>
+                  <span style={{ width: 44, textAlign: 'center' }}>{icon}</span><span>{label}</span>
                 </div>
               ))}
             </div>
@@ -464,7 +560,7 @@ export default function AdminPage() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: 'var(--bg-primary)' }}>
-                        {['Driver', 'Type', 'Status', 'Rating', 'Location'].map(h => (
+                        {['Driver', 'Type', 'Status', 'Battery', 'Rating', 'Location'].map(h => (
                           <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{h}</th>
                         ))}
                       </tr>
@@ -483,6 +579,20 @@ export default function AdminPage() {
                             <span className={`badge ${d.is_available && d.is_online ? 'badge-green' : d.is_online ? 'badge-orange' : 'badge-red'}`}>
                               {d.is_available && d.is_online ? 'Available' : d.is_online ? 'On Trip' : 'Offline'}
                             </span>
+                          </td>
+                          <td style={{ padding: '10px 14px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={{ width: 40, height: 6, background: 'var(--bg-secondary)', borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{ width: `${(d.battery_level || 0) * 100}%`, height: '100%', background: (d.battery_level || 0) < 0.2 ? 'var(--accent-red)' : (d.battery_level || 0) < 0.5 ? 'var(--accent-orange)' : 'var(--accent-green)' }} />
+                              </div>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: (d.battery_level || 0) < 0.2 ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                                {Math.round((d.battery_level || 0) * 100)}%
+                              </span>
+                              {d.is_charging && <span style={{ fontSize: 10 }}>🔌</span>}
+                            </div>
+                            {(d.battery_level || 0) < 0.2 && !d.is_charging && (
+                              <div style={{ fontSize: 9, color: 'var(--accent-red)', fontWeight: 600 }}>RESTRICTED</div>
+                            )}
                           </td>
                           <td style={{ padding: '10px 14px', color: 'var(--accent-orange)' }}>⭐ {d.rating}</td>
                           <td style={{ padding: '10px 14px', fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>

@@ -17,6 +17,11 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+BATTERY_CRITICAL = 0.05
+BATTERY_LOW = 0.20
+RESTRICTED_RADIUS_KM = 2.0
+
+
 def score_driver_for_hotspot(
     driver: Dict,
     hotspot: Dict,
@@ -39,10 +44,16 @@ def score_driver_for_hotspot(
     else:
         idle_minutes = 10
 
-    idle_score = 1 / (1 + idle_minutes / 30)  # longer idle = lower score (better)
-    rating_score = (5.0 - driver.get("rating", 4.5)) / 5.0  # lower rating = higher score (worse)
+    idle_score = 1 / (1 + idle_minutes / 30)  # longer idle = lower score (best)
+    rating_score = (5.0 - driver.get("rating", 4.5)) / 5.0 
 
-    total = (weight_distance * dist_score) + (weight_idle * idle_score) + (weight_rating * rating_score)
+    # Battery factor: lower battery is worse for far hotspots
+    battery = driver.get("battery_level", 1.0)
+    battery_penalty = 0
+    if battery < BATTERY_LOW:
+        battery_penalty = (BATTERY_LOW - battery) * 5.0 # High penalty
+    
+    total = (weight_distance * dist_score) + (weight_idle * idle_score) + (weight_rating * rating_score) + battery_penalty
     return round(total, 4)
 
 
@@ -75,11 +86,25 @@ def greedy_assignment(
         # Find available unassigned drivers within radius
         candidates = []
         for driver in drivers:
-            if not driver.get("is_available") or not driver.get("is_online"):
+            if not driver.get("is_online") or not driver.get("is_available"):
                 continue
             if driver["id"] in assigned_driver_ids:
                 continue
+
+            # Battery constraints (Twist 2)
+            battery = driver.get("battery_level", 1.0)
+            is_charging = driver.get("is_charging", False)
+            
+            if battery < BATTERY_CRITICAL or is_charging:
+                continue
+            
             dist = haversine(driver["lat"], driver["lon"], hlat, hlon)
+            
+            # Restricted routing for low battery: Only trips < 2km
+            if battery < BATTERY_LOW:
+                if dist > RESTRICTED_RADIUS_KM:
+                    continue # too far for restricted driver
+            
             if dist <= radius_km:
                 score = score_driver_for_hotspot(driver, hotspot, dist)
                 candidates.append((score, dist, driver))
@@ -172,3 +197,14 @@ def real_time_match(
                            "eta_minutes": round(wait_min, 1), "match_score": round(score, 4)}
 
     return best_driver
+
+
+def proactive_rebalance_future(
+    drivers: List[Dict],
+    future_hotspots: List[Dict],
+) -> List[Dict]:
+    """
+    Twist 1: Pre-positioning logic for future surges
+    Looks at T+30 demand and moves nearby idle high-battery drivers.
+    """
+    return greedy_assignment(drivers, future_hotspots, radius_km=8.0)

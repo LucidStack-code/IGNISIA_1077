@@ -44,7 +44,7 @@ def query_drivers_near_hotspot(
             SELECT
                 d.id, d.name, d.vehicle_type, d.lat, d.lon,
                 d.is_online, d.is_available, d.rating, d.idle_since,
-                d.assigned_hotspot,
+                d.assigned_hotspot, d.battery_level, d.is_charging,
                 ST_Distance(
                     d.location::geography,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
@@ -69,7 +69,7 @@ def query_drivers_near_hotspot(
         rows = cur.fetchall()
         cols = ["id", "name", "vehicle_type", "lat", "lon", "is_online",
                 "is_available", "rating", "idle_since", "assigned_hotspot",
-                "distance_km", "idle_minutes"]
+                "battery_level", "is_charging", "distance_km", "idle_minutes"]
         drivers = []
         for row in rows:
             d = dict(zip(cols, row))
@@ -94,13 +94,14 @@ def query_all_drivers() -> List[Dict]:
         cur = conn.cursor()
         cur.execute("""
             SELECT id, name, vehicle_type, lat, lon, is_online, is_available,
-                   rating, idle_since, assigned_hotspot, updated_at
+                   rating, idle_since, assigned_hotspot, battery_level, is_charging, updated_at
             FROM drivers_live
             ORDER BY updated_at DESC
         """)
         rows = cur.fetchall()
         cols = ["id", "name", "vehicle_type", "lat", "lon", "is_online",
-                "is_available", "rating", "idle_since", "assigned_hotspot", "updated_at"]
+                "is_available", "rating", "idle_since", "assigned_hotspot", 
+                "battery_level", "is_charging", "updated_at"]
         drivers = []
         for row in rows:
             d = dict(zip(cols, row))
@@ -236,3 +237,50 @@ def get_active_hotspots() -> List[Dict]:
     except Exception as e:
         print(f"Get hotspots error: {e}")
         return []
+def update_driver_battery(driver_id: str, battery_level: float, is_charging: bool = False) -> bool:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE drivers_live
+            SET battery_level = %s, is_charging = %s, updated_at = NOW()
+            WHERE id = %s
+        """, (battery_level, is_charging, driver_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Update battery error: {e}")
+        return False
+
+
+def get_charging_hubs() -> List[Dict]:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, lat, lon, capacity, available_spots FROM charging_hubs WHERE is_active = TRUE")
+        rows = cur.fetchall()
+        cols = ["id", "name", "lat", "lon", "capacity", "available_spots"]
+        hubs = [dict(zip(cols, row)) for row in rows]
+        cur.close()
+        conn.close()
+        return hubs
+    except Exception as e:
+        print(f"Get hubs error: {e}")
+        return []
+def create_driver(driver_id: str, name: str, vehicle_type: str, lat: float, lon: float) -> bool:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO drivers_live (id, name, vehicle_type, lat, lon, location, is_online, is_available, updated_at)
+            VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), TRUE, TRUE, NOW())
+        """, (driver_id, name, vehicle_type, lat, lon, lon, lat))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Create driver error: {e}")
+        return False
