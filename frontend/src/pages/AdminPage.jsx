@@ -100,7 +100,7 @@ export default function AdminPage() {
     setWsEvents(e => [{ id, msg, type, time: new Date().toLocaleTimeString() }, ...e.slice(0, 19)]);
   };
 
-  // Load all data
+  // Load all data in frontend
   const loadData = useCallback(async () => {
     try {
       const [driverRes, hotspotRes, predRes, trainRes, dashRes, rideRes, hubRes] = await Promise.allSettled([
